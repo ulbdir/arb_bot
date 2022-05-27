@@ -7,8 +7,6 @@ from spookyswap_abi import spooky_abi
 import logging
 import requests
 
-#Webhook of my channel. Click on edit channel --> Webhooks --> Creates webhook
-discord_url = "https://discord.com/api/webhooks/978684379494760518/KTYWVtAUjourCWxc17g38bq-0SjrVUtjY_aM1FXd1tzP035rGWYfDNuRVlInsdCs4YhB"
 
 logging.basicConfig(format = "%(asctime)s %(levelname)s:%(message)s", level=logging.INFO)
 
