@@ -9,6 +9,8 @@ import "./IUniswapV2Router01.sol";
 // see https://github.com/paco0x/amm-arbitrageur/blob/master/contracts/FlashBot.sol
 // see https://ftmscan.com/address/0x4614b22722e8fd12ae5ee131d1a14f449849a64f#code
 
+import "hardhat/console.sol";
+
 contract Swapper is Ownable {
 
     // address of WFTM Token
@@ -41,7 +43,7 @@ contract Swapper is Ownable {
         require(_balance_after_swap > _balance_initial, "Not profitable");
 
         // transfer WFTM back to wallet
-        token_wftm.transferFrom(address(this), msg.sender, _balance_after_swap);
+        token_wftm.transfer(msg.sender, _balance_after_swap);
     }
 
     function swap(address _router, address _token_in, address _token_out, uint _amount_in) private returns (uint) {
@@ -60,11 +62,13 @@ contract Swapper is Ownable {
     }
 
     function buy(address _router, address _token, uint _amount) private returns(uint) {
+        console.log("buy token %s with amount %s", _token, _amount);
         uint amount_received = swap(_router, wftm, _token, _amount);
         return amount_received;
     }
 
     function sell(address _router, address _token, uint _amount) private returns (uint) {
+        console.log("buy token %s with amount %s", _token, _amount);
         uint amount_received = swap(_router, _token, wftm, _amount);
         return amount_received;
     }
@@ -88,5 +92,6 @@ contract Swapper is Ownable {
         IERC20 token = IERC20(_token);
         token.transfer(msg.sender, token.balanceOf(address(this)));
     }
-
 }
+
+
