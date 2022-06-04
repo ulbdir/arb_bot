@@ -6,6 +6,7 @@ from web3 import Web3, middleware
 from web3.gas_strategies import time_based
 
 from web3.middleware import geth_poa_middleware
+from block_analyzer import BlockAnalyzer
 from erc20 import Erc20
 from exchange import Exchange
 from abi.swapper_abi import swapper_abi
@@ -81,7 +82,7 @@ def execute_multiswap(r1: Exchange, r2: Exchange, token: Erc20, amount: float, g
         if receipt["status"] == 1:
             result = swap_result.SUCCESSFUL
         else:
-            swap_result.REVERTED
+            result = swap_result.REVERTED
             logging.info("Transaction reverted")
     except Exception as e:
         logging.info("Sending transaction failed: " + str(e))
@@ -127,7 +128,7 @@ def compute_token_list(exchanges: list[Exchange]):
         for exch in exchanges:
             if token in exch.token_paired_with_wftm:
                 dexes.append(exch)
-        if len(dexes) > 2:
+        if len(dexes) > 1:
             result.append( { "token": Erc20(w3, token), "exchanges": dexes } )
     
     return result
@@ -168,65 +169,72 @@ w3.middleware_onion.add(middleware.simple_cache_middleware)
 
 # initialize gas price
 gas = 300000
-gas_price = w3.eth.generate_gas_price()
-tx_cost = float(Web3.fromWei(gas*gas_price, "ether"))
-logging.info(str.format("Estimated tx cost: {:.4f} FTM", tx_cost))
 
+# initialize block analyzer
+block_analyzer = BlockAnalyzer(w3)
 
 while True:
 
     amount_to_swap = 50
-    token_counter = 0
 
-    for token in monitored_tokens:
+    if not w3.eth.syncing:
+        
+        # reset gas price
+        gas_price = None
+        token_list = block_analyzer.process_latest_blocks()
+        token_list.update(block_analyzer.process_pending_transactions())
 
-        if not w3.eth.syncing:
-            # update gas price
-            token_counter += 1
-            if token_counter % 5 == 0:
-                gas_price = w3.eth.generate_gas_price()
-                tx_cost = float(Web3.fromWei(gas*gas_price, "ether"))
-                logging.info(str.format("Estimated tx cost: {:.4f} FTM", tx_cost))
-            
-            ex_l = [ e.name for e in token["exchanges"] ]
-            logging.info(str.format("{:25} {}", token["token"].name, str(ex_l)))
+        for token_address in token_list:
 
+            # find the token address in the monitored_token list
+            for token in monitored_tokens:
+                if token["token"].address == token_address:
+                    ex_l = [ e.name for e in token["exchanges"] ]
+                    logging.info(str.format("{:25} {}", token["token"].name, str(ex_l)))
 
-            max_buy = None
-            max_sell = None
-            
-            # get best buy price for the selected amount to swap
-            for exchange in token["exchanges"]:
-                try:
-                    buy_price = get_price(exchange.router_contract, amount_to_swap, [wftm, token["token"]])
-                    logging.debug(str.format("{:>12}    buy {:>12.6f}", exchange.name, buy_price))
+                    max_buy = None
+                    max_sell = None
+                    
+                    # get best buy price for the selected amount to swap
+                    for exchange in token["exchanges"]:
+                        try:
+                            buy_price = get_price(exchange.router_contract, amount_to_swap, [wftm, token["token"]])
+                            logging.debug(str.format("{:>12}    buy {:>12.6f}", exchange.name, buy_price))
 
-                    if max_buy is None or max_buy["price"] < buy_price:
-                        max_buy = {"exchange": exchange, "price": buy_price}
-                except:
-                    pass
+                            if max_buy is None or max_buy["price"] < buy_price:
+                                max_buy = {"exchange": exchange, "price": buy_price}
+                        except:
+                            pass
 
-            # now find best exchange to swap the received amount back
-            for exchange in token["exchanges"]:
-                try:
-                    sell_price = get_price(exchange.router_contract, max_buy["price"], [token["token"], wftm])
-                    logging.debug(str.format("{:>12}    sell {:>12.6f}", exchange.name, sell_price))
+                    # now find best exchange to swap the received amount back
+                    for exchange in token["exchanges"]:
+                        try:
+                            sell_price = get_price(exchange.router_contract, max_buy["price"], [token["token"], wftm])
+                            logging.debug(str.format("{:>12}    sell {:>12.6f}", exchange.name, sell_price))
 
-                    if max_sell is None or max_sell["price"] < sell_price:
-                        max_sell = {"exchange": exchange, "price": sell_price}
-                except:
-                    pass
+                            if max_sell is None or max_sell["price"] < sell_price:
+                                max_sell = {"exchange": exchange, "price": sell_price}
+                        except:
+                            pass
 
-            # if profit is expected, execute the swap and log it
-            if max_buy is not None and max_sell is not None:
-                if max_buy["exchange"] != max_sell["exchange"]:
-                    profit = max_sell["price"] - amount_to_swap
-                    if profit - tx_cost > 0.05:
-                        result = execute_multiswap(max_buy["exchange"], max_sell["exchange"], token["token"], amount_to_swap, gas_price)
-                        msg = str.format("{:.2f}/{:.2f} FTM {} buy@{} sell@{} -> {}",profit, amount_to_swap, token["token"].name, max_buy["exchange"].name, max_sell["exchange"].name, result)
-                        logging.info(msg)
-                        if result == swap_result.SUCCESSFUL or result == swap_result.REVERTED:
-                            discord_message(msg)
-        else:
-            logging.info("Node is syncing")
-            time.sleep(5)
+                    # if profit is expected, execute the swap and log it
+                    if max_buy is not None and max_sell is not None:
+                        if max_buy["exchange"] != max_sell["exchange"]:
+                            profit = max_sell["price"] - amount_to_swap
+                            
+                            # update gas price
+                            if gas_price is None:
+                                gas_price = w3.eth.generate_gas_price()
+                                tx_cost = float(Web3.fromWei(gas*gas_price, "ether"))
+                            
+                            if profit - tx_cost > 0.05:
+                                result = execute_multiswap(max_buy["exchange"], max_sell["exchange"], token["token"], amount_to_swap, gas_price)
+                                msg = str.format("{:.2f}/{:.2f} FTM {} buy@{} sell@{} -> {}",profit, amount_to_swap, token["token"].name, max_buy["exchange"].name, max_sell["exchange"].name, result)
+                                logging.info(msg)
+                                if result == swap_result.SUCCESSFUL or result == swap_result.REVERTED:
+                                    discord_message(msg)
+                            else:
+                                logging.info(str.format("    Profit too low: {:.2f} FTM (profit: {:.2f}, tx cost: {:.4f} FTM, gas price: {:.1f} gwei)", profit - tx_cost, profit, tx_cost, Web3.fromWei(gas_price, "gwei")))
+    else:
+        logging.info("Node is syncing")
+        time.sleep(5)
